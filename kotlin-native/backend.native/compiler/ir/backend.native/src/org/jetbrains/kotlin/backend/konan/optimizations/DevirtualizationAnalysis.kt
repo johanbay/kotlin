@@ -13,6 +13,7 @@ import org.jetbrains.kotlin.backend.common.lower.createIrBuilder
 import org.jetbrains.kotlin.backend.common.lower.irBlock
 import org.jetbrains.kotlin.backend.konan.*
 import org.jetbrains.kotlin.backend.konan.ir.isBoxOrUnboxCall
+import org.jetbrains.kotlin.backend.konan.ir.konanLibrary
 import org.jetbrains.kotlin.backend.konan.util.IntArrayList
 import org.jetbrains.kotlin.backend.konan.util.LongArrayList
 import org.jetbrains.kotlin.backend.konan.lower.getObjectClassInstanceFunction
@@ -33,6 +34,7 @@ import org.jetbrains.kotlin.ir.util.*
 import org.jetbrains.kotlin.ir.visitors.IrElementTransformer
 import org.jetbrains.kotlin.ir.visitors.IrElementVisitorVoid
 import org.jetbrains.kotlin.ir.visitors.acceptChildrenVoid
+import org.jetbrains.kotlin.konan.target.CompilerOutputKind
 import org.jetbrains.kotlin.name.Name
 import java.util.*
 import kotlin.collections.ArrayList
@@ -58,10 +60,14 @@ internal object DevirtualizationAnalysis {
         val exported = if (entryPoint != null)
             listOf(moduleDFG.symbolTable.mapFunction(entryPoint).resolved())
         else {
+            val exportedDeps = irModule.descriptor.getExportedDependencies(context.config).mapNotNull { it.konanLibrary }
             // In a library every public function and every function accessible via virtual call belongs to the rootset.
             moduleDFG.symbolTable.functionMap.values.filter {
-                it is DataFlowIR.FunctionSymbol.Public
-                        || (it as? DataFlowIR.FunctionSymbol.External)?.isExported == true
+                (context.config.produce != CompilerOutputKind.FRAMEWORK
+                        || it.irFunction?.konanLibrary?.let { exportedDeps.contains(it) } ?: true
+                        ) &&
+                        (it is DataFlowIR.FunctionSymbol.Public
+                                || (it as? DataFlowIR.FunctionSymbol.External)?.isExported == true)
             } +
                     moduleDFG.symbolTable.classMap.values
                             .filterIsInstance<DataFlowIR.Type.Declared>()
@@ -108,7 +114,7 @@ internal object DevirtualizationAnalysis {
             }
         })
 
-        return (exported + globalInitializers + explicitlyExported + associatedObjectConstructors + leakingThroughFunctionReferences).distinct()
+        return ((exported + globalInitializers + explicitlyExported + associatedObjectConstructors + leakingThroughFunctionReferences).distinct()).also { println("root set contains ${it.count()} functions") }
     }
 
     fun BitSet.format(allTypes: Array<DataFlowIR.Type.Declared>): String {
